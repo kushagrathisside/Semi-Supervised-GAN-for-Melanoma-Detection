@@ -1,0 +1,73 @@
+# =========================================
+# Experiment Configuration
+# =========================================
+
+experiment:
+  name: melanoma_sgan_high_capacity_128
+  seed: 42
+
+
+# =========================================
+# Dataset Configuration
+# =========================================
+
+dataset:
+
+  labeled_path: data/labeled
+  unlabeled_path: data/unlabeled/images
+  generated_path: data/generated
+
+  image_size: 64
+  num_channels: 3
+  num_classes: 2
+
+
+# =========================================
+# Generator Configuration
+# =========================================
+
+generator:
+
+  latent_dim: 256
+  feature_maps: 160
+
+
+# =========================================
+# Discriminator Configuration
+# =========================================
+
+discriminator:
+
+  feature_maps: 160
+
+
+# =========================================
+# Training Configuration
+# =========================================
+
+training:
+
+  batch_size: 256
+  epochs: 600
+
+  lr_generator: 0.0002
+  lr_discriminator: 0.0001
+
+  beta1: 0.5
+  beta2: 0.999
+
+  num_workers: 8
+
+
+# =========================================
+# Logging / Saving
+# =========================================
+
+output:
+
+  checkpoint_dir: outputs/checkpoints
+  sample_dir: outputs/samples
+  log_dir: outputs/logs
+
+  save_interval: 5
+  sample_interval: 1
