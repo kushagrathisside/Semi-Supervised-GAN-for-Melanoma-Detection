@@ -1,81 +1,193 @@
-import torch
-import yaml
-import os
+"""
+Generate synthetic dermoscopy images using a trained SGAN generator.
 
+Loads a trained generator checkpoint and generates realistic synthetic images
+for dataset augmentation.
+"""
+
+from pathlib import Path
+from typing import Optional
+
+import torch
 from torchvision.utils import save_image
+from tqdm import tqdm
 
 from models.sgan import SGAN
+from utils.config import SGANConfig
+from utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def generate_samples(
-    checkpoint_path,
-    num_images=1000
-):
+    checkpoint_path: str,
+    num_images: int = 1000,
+    config: Optional[SGANConfig] = None,
+    batch_size: int = 64,
+    config_path: str = "configs/config.yaml"
+) -> int:
+    """
+    Generate synthetic images using trained generator.
 
-    with open("configs/config.yaml") as f:
-        config = yaml.safe_load(f)
+    Args:
+        checkpoint_path: Path to model checkpoint
+        num_images: Number of images to generate (default: 1000)
+        config: SGAN configuration (if None, loads from config_path)
+        batch_size: Batch size for generation (default: 64)
+        config_path: Path to config file if config not provided
 
-    device = torch.device(
-        "cuda" if torch.cuda.is_available() else "cpu"
-    )
+    Returns:
+        Number of images generated
 
-    model = SGAN(config).to(device)
+    Raises:
+        FileNotFoundError: If checkpoint or config not found
+        RuntimeError: If checkpoint loading fails
+    """
+    logger.info(f"Initializing image generation ({num_images} images)...")
 
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    # Load config if not provided
+    if config is None:
+        logger.info(f"Loading config from: {config_path}")
+        config = SGANConfig.from_yaml(config_path)
 
-    model.load_state_dict(checkpoint)
+    # Validate checkpoint exists
+    checkpoint_file = Path(checkpoint_path)
+    if not checkpoint_file.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
+    logger.info(f"Using checkpoint: {checkpoint_path}")
+
+    # Determine device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info(f"Using device: {device}")
+
+    try:
+        # Load model
+        logger.info("Loading SGAN model...")
+        model = SGAN(config).to(device)
+
+        # Load checkpoint
+        logger.info("Loading checkpoint...")
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+
+        # Handle different checkpoint formats
+        if isinstance(checkpoint, dict):
+            if "generator" in checkpoint:
+                # Full model checkpoint
+                model.load_state_dict(checkpoint)
+            elif "generator_state_dict" in checkpoint or "state_dict" in checkpoint:
+                # Alternative checkpoint format
+                state_dict = checkpoint.get("generator_state_dict", checkpoint.get("state_dict"))
+                model.generator.load_state_dict(state_dict)
+            else:
+                # Try direct load
+                model.generator.load_state_dict(checkpoint)
+        else:
+            # Assume it's a state dict
+            model.generator.load_state_dict(checkpoint)
+
+        logger.info("Checkpoint loaded successfully")
+
+    except Exception as e:
+        logger.error(f"Failed to load checkpoint: {e}")
+        raise RuntimeError(f"Checkpoint loading failed: {e}")
+
+    # Prepare generator
     generator = model.generator
     generator.eval()
+    logger.info("Generator set to evaluation mode")
 
-    latent_dim = config["generator"]["latent_dim"]
+    # Prepare output directory
+    output_dir = Path(config.dataset.generated_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Output directory: {output_dir}")
 
-    output_dir = config["dataset"]["generated_path"]
-
-    os.makedirs(output_dir, exist_ok=True)
-
-    batch_size = 64
-
+    # Generate images
+    latent_dim = config.generator.latent_dim
     generated = 0
 
+    logger.info(f"Generating {num_images} images...")
+
     with torch.no_grad():
+        # Use progress bar
+        num_batches = (num_images + batch_size - 1) // batch_size
 
-        while generated < num_images:
+        for batch_idx in tqdm(range(num_batches), desc="Generating images"):
+            # Determine batch size for this iteration
+            current_batch_size = min(batch_size, num_images - generated)
 
+            # Generate noise
             z = torch.randn(
-                batch_size,
+                current_batch_size,
                 latent_dim,
-                1,
-                1,
+                1, 1,
                 device=device
             )
 
-            fake_images = generator(z)
+            # Generate images
+            try:
+                fake_images = generator(z)
+            except Exception as e:
+                logger.error(f"Generation failed at batch {batch_idx}: {e}")
+                raise
 
-            for img in fake_images:
-
-                path = os.path.join(
-                    output_dir,
-                    f"gen_{generated}.png"
-                )
-
-                save_image(
-                    img,
-                    path,
-                    normalize=True
-                )
-
-                generated += 1
-
+            # Save images
+            for img_idx, img in enumerate(fake_images):
                 if generated >= num_images:
                     break
 
-    print(f"{generated} images generated.")
+                img_filename = f"gen_{generated:06d}.png"
+                img_path = output_dir / img_filename
+
+                try:
+                    save_image(img, str(img_path), normalize=True)
+                    generated += 1
+                except Exception as e:
+                    logger.error(f"Failed to save image {img_filename}: {e}")
+                    raise
+
+    logger.info(f"Successfully generated {generated} images")
+    logger.info(f"Images saved to: {output_dir}")
+
+    return generated
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Generate synthetic dermoscopy images"
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        required=True,
+        help="Path to model checkpoint"
+    )
+    parser.add_argument(
+        "--num_images",
+        type=int,
+        default=1000,
+        help="Number of images to generate"
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="configs/config.yaml",
+        help="Path to configuration file"
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=64,
+        help="Batch size for generation"
+    )
+
+    args = parser.parse_args()
 
     generate_samples(
-        checkpoint_path="outputs/checkpoints/model.pt",
-        num_images=1000
+        checkpoint_path=args.checkpoint,
+        num_images=args.num_images,
+        config_path=args.config,
+        batch_size=args.batch_size
     )

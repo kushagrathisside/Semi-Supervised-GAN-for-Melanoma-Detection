@@ -1,0 +1,3 @@
+"""
+SGAN tests package.
+"""

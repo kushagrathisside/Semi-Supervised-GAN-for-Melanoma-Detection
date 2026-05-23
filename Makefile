@@ -4,9 +4,9 @@
 
 PYTHON=python
 CONFIG=configs/config.yaml
-CHECKPOINT=outputs/checkpoints/model_100.pt
+CHECKPOINT=outputs/checkpoints/best_generator.pt
 
-.PHONY: help setup install train generate tensorboard clean
+.PHONY: help setup install train generate tensorboard clean test sanity lint coverage
 
 # -----------------------------------------
 # Help
@@ -15,12 +15,23 @@ CHECKPOINT=outputs/checkpoints/model_100.pt
 help:
 	@echo "Available commands:"
 	@echo ""
-	@echo "make setup        -> Full project setup (dataset + install)"
-	@echo "make install      -> Install Python dependencies"
-	@echo "make train        -> Start SGAN training"
-	@echo "make generate     -> Generate synthetic images"
-	@echo "make tensorboard  -> Launch TensorBoard"
-	@echo "make clean        -> Remove generated files"
+	@echo "Setup & Installation:"
+	@echo "  make setup        -> Full project setup (dataset + install)"
+	@echo "  make install      -> Install Python dependencies"
+	@echo "  make sanity       -> Run sanity checks"
+	@echo ""
+	@echo "Training & Generation:"
+	@echo "  make train        -> Start SGAN training"
+	@echo "  make generate     -> Generate synthetic images"
+	@echo "  make tensorboard  -> Launch TensorBoard"
+	@echo ""
+	@echo "Testing & Validation:"
+	@echo "  make test         -> Run all tests"
+	@echo "  make test-v       -> Run tests with verbose output"
+	@echo "  make coverage     -> Generate coverage report"
+	@echo ""
+	@echo "Maintenance:"
+	@echo "  make clean        -> Remove generated files"
 	@echo ""
 
 # -----------------------------------------
@@ -37,6 +48,13 @@ setup:
 
 install:
 	pip install -r requirements.txt
+
+# -----------------------------------------
+# Sanity checks
+# -----------------------------------------
+
+sanity:
+	$(PYTHON) sanitytest.py
 
 # -----------------------------------------
 # Train SGAN
@@ -60,6 +78,35 @@ tensorboard:
 	tensorboard --logdir outputs/logs
 
 # -----------------------------------------
+# Testing
+# -----------------------------------------
+
+test:
+	pytest
+
+test-v:
+	pytest -v
+
+test-unit:
+	pytest tests/ -v
+
+# -----------------------------------------
+# Coverage
+# -----------------------------------------
+
+coverage:
+	pytest --cov=. --cov-report=html --cov-report=term-missing
+	@echo "Coverage report generated in htmlcov/index.html"
+
+# -----------------------------------------
+# Code quality
+# -----------------------------------------
+
+lint:
+	@echo "Running code quality checks..."
+	@echo "Note: Install pylint with: pip install pylint"
+
+# -----------------------------------------
 # Clean generated outputs
 # -----------------------------------------
 
@@ -68,3 +115,6 @@ clean:
 	rm -rf outputs/logs/*
 	rm -rf outputs/checkpoints/*
 	rm -rf data/generated/*
+	rm -rf __pycache__ .pytest_cache htmlcov .coverage
+	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+	find . -type f -name "*.pyc" -delete
