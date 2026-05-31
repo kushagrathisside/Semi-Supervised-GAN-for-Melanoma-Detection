@@ -65,7 +65,7 @@ def compute_inception_score(
     Higher IS indicates better quality and diversity.
 
     Args:
-        images: Tensor of images (N, C, H, W) with values in [0, 1]
+        images: Tensor of images (N, C, H, W) with values in [-1, 1]
         batch_size: Batch size for processing
         resize: Whether to resize images to 299x299 for Inception network
 
@@ -77,13 +77,14 @@ def compute_inception_score(
         Inception score alone doesn't guarantee good images, combine with FID.
     """
     try:
-        from torchvision.models import inception_v3
+        from torchvision.models import inception_v3, Inception_V3_Weights
         from torch.nn.functional import softmax
     except ImportError:
         raise RuntimeError("torchvision required for Inception Score computation")
 
     device = images.device
-    inception_model = inception_v3(pretrained=True, transform_input=True).to(device)
+    inception_model = inception_v3(weights=Inception_V3_Weights.DEFAULT,
+                                   transform_input=False).to(device)
     inception_model.eval()
 
     # Resize if needed
@@ -91,9 +92,12 @@ def compute_inception_score(
         from torch.nn.functional import interpolate
         images = interpolate(images, size=(299, 299), mode="bilinear", align_corners=False)
 
-    # Ensure images are in [0, 1]
-    images = (images + 1) / 2  # Convert from [-1, 1] to [0, 1]
+    # Convert from [-1, 1] to [0, 1], then apply ImageNet normalization
+    images = (images + 1) / 2
     images = torch.clamp(images, 0, 1)
+    mean = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 3, 1, 1)
+    std = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 3, 1, 1)
+    images = (images - mean) / std
 
     scores = []
 
@@ -136,19 +140,18 @@ def compute_precision_recall(
     predictions = predictions.cpu().numpy()
     labels = labels.cpu().numpy()
 
-    # For binary classification (0: benign, 1: malignant)
-    if predictions.max() == 1:
-        tp = np.sum((predictions == 1) & (labels == 1))
-        fp = np.sum((predictions == 1) & (labels == 0))
-        fn = np.sum((predictions == 0) & (labels == 1))
+    tp = int(np.sum((predictions == 1) & (labels == 1)))
+    fp = int(np.sum((predictions == 1) & (labels == 0)))
+    fn = int(np.sum((predictions == 0) & (labels == 1)))
 
-        precision = tp / (tp + fp + 1e-8)
-        recall = tp / (tp + fn + 1e-8)
-        f1 = 2 * (precision * recall) / (precision + recall + 1e-8)
+    if tp + fp + fn == 0:
+        return 0.0, 0.0, 0.0
 
-        return float(precision), float(recall), float(f1)
-    else:
-        raise ValueError("Expected binary classification task")
+    precision = tp / (tp + fp + 1e-8)
+    recall = tp / (tp + fn + 1e-8)
+    f1 = 2 * (precision * recall) / (precision + recall + 1e-8)
+
+    return float(precision), float(recall), float(f1)
 
 
 def compute_class_wise_accuracy(

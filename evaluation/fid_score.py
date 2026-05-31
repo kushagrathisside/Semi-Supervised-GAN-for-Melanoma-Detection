@@ -23,8 +23,6 @@ def compute_fid(real_dir, fake_dir):
 
         output = result.decode()
 
-        print(output)  # useful for debugging
-
         match = re.search(r"FID:\s*([0-9\.]+)", output)
 
         if match:

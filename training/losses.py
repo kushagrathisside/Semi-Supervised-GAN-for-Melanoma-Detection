@@ -11,7 +11,6 @@ def feature_matching_loss(real_features, fake_features):
 
     return loss
 
-import torch.nn.functional as F
 
 def supervised_loss(logits, labels):
 

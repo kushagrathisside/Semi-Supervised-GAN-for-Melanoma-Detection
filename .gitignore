@@ -81,6 +81,7 @@ outputs/
 data/
 MelanomaDetection/
 MelanomaDetection.zip
+evaluation/real_samples/
 
 # Checkpoints and models
 *.pt
