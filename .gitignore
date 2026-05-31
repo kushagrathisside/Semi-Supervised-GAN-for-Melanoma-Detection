@@ -82,6 +82,7 @@ data/
 MelanomaDetection/
 MelanomaDetection.zip
 evaluation/real_samples/
+evaluation/fake_samples/
 
 # Checkpoints and models
 *.pt
