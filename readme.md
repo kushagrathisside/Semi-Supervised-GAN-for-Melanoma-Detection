@@ -4,6 +4,8 @@ A PyTorch implementation of a Semi-Supervised Generative Adversarial Network (SG
 
 This project leverages a large pool of **~7000 unlabeled images** and a **small set of labeled images** (benign/malignant) to train a GAN that can both classify melanomas and generate realistic synthetic dermoscopy images for dataset augmentation.
 
+##### Claude contributed only by adding documentation.
+
 ## Overview
 
 The SGAN architecture enables the discriminator to serve a **dual purpose**:
