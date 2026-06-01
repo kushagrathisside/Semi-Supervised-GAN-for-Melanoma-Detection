@@ -11,7 +11,7 @@ from typing import Tuple, List
 from PIL import Image
 import torch
 from torch.utils.data import Dataset
-from utils.transforms import get_transforms
+from utils.transforms import get_train_transforms, get_eval_transforms
 
 
 class LabeledMelanomaDataset(Dataset):
@@ -30,13 +30,15 @@ class LabeledMelanomaDataset(Dataset):
         ValueError: If no images found in directories
     """
 
-    def __init__(self, root_dir: str, image_size: int = 64) -> None:
+    def __init__(self, root_dir: str, image_size: int = 64, train: bool = True) -> None:
         """
         Initialize labeled dataset.
 
         Args:
-            root_dir: Root directory containing 'benign' and 'malignant' subdirs
+            root_dir:   Root directory containing 'benign' and 'malignant' subdirs
             image_size: Target image size for preprocessing (default: 64)
+            train:      If True, apply augmented training transforms.
+                        If False, apply deterministic evaluation transforms.
 
         Raises:
             FileNotFoundError: If required directories don't exist
@@ -54,16 +56,16 @@ class LabeledMelanomaDataset(Dataset):
         if not malignant_dir.exists():
             raise FileNotFoundError(f"Malignant directory not found: {malignant_dir}")
 
-        # Load benign images (label=0)
-        benign_images = list(benign_dir.glob("*"))
-        for img_path in benign_images:
-            if img_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp']:
+        valid_exts = {'.jpg', '.jpeg', '.png', '.bmp'}
+
+        # Load benign images (label=0) — sorted for cross-platform reproducibility
+        for img_path in sorted(benign_dir.glob("*")):
+            if img_path.suffix.lower() in valid_exts:
                 self.samples.append((str(img_path), 0))
 
-        # Load malignant images (label=1)
-        malignant_images = list(malignant_dir.glob("*"))
-        for img_path in malignant_images:
-            if img_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp']:
+        # Load malignant images (label=1) — sorted for cross-platform reproducibility
+        for img_path in sorted(malignant_dir.glob("*")):
+            if img_path.suffix.lower() in valid_exts:
                 self.samples.append((str(img_path), 1))
 
         if len(self.samples) == 0:
@@ -72,7 +74,7 @@ class LabeledMelanomaDataset(Dataset):
                 "Expected subdirectories: benign/, malignant/"
             )
 
-        self.transform = get_transforms(image_size)
+        self.transform = get_train_transforms(image_size) if train else get_eval_transforms(image_size)
 
     def __len__(self) -> int:
         """Return total number of samples."""
@@ -138,16 +140,17 @@ class UnlabeledMelanomaDataset(Dataset):
 
         # Find all image files
         valid_extensions = {'.jpg', '.jpeg', '.png', '.bmp'}
-        self.images: List[str] = [
+        self.images: List[str] = sorted([
             str(img_path)
             for img_path in root_path.iterdir()
             if img_path.suffix.lower() in valid_extensions
-        ]
+        ])
 
         if len(self.images) == 0:
             raise ValueError(f"No images found in {root_dir}")
 
-        self.transform = get_transforms(image_size)
+        # Unlabeled data is only used during training — always use augmented transforms
+        self.transform = get_train_transforms(image_size)
 
     def __len__(self) -> int:
         """Return total number of samples."""

@@ -2,6 +2,9 @@ import torch
 import torch.nn as nn
 from torch.nn.utils import spectral_norm
 
+from models.generator import _dcgan_init
+
+
 class Discriminator(nn.Module):
 
     def __init__(self, feature_maps=64, channels=3, num_classes=2):
@@ -22,14 +25,18 @@ class Discriminator(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
         )
 
-        self.classifier = nn.Conv2d(
+        # Spectral norm applied to the classifier too — keeps singular values bounded
+        # across the entire network, not just the feature extractor.
+        self.classifier = spectral_norm(nn.Conv2d(
             feature_maps * 8,
             num_classes + 1,
             4,
             1,
             0,
-            bias=False
-        )
+            bias=False,
+        ))
+
+        self.apply(_dcgan_init)
 
     def forward(self, x, return_features=False):
 

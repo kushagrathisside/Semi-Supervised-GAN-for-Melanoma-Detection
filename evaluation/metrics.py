@@ -6,6 +6,7 @@ Provides FID score, Inception Score, and discriminator classification metrics.
 
 import subprocess
 import re
+import sys
 from typing import Optional, Tuple
 import numpy as np
 import torch
@@ -30,11 +31,11 @@ def compute_fid(real_dir: str, fake_dir: str) -> Optional[float]:
     """
     try:
         cmd = [
-            "python",
+            sys.executable,
             "-m",
             "pytorch_fid",
             real_dir,
-            fake_dir
+            fake_dir,
         ]
 
         result = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
@@ -152,6 +153,37 @@ def compute_precision_recall(
     f1 = 2 * (precision * recall) / (precision + recall + 1e-8)
 
     return float(precision), float(recall), float(f1)
+
+
+def compute_auc_roc(
+    discriminator_logits: torch.Tensor,
+    labels: torch.Tensor,
+) -> float:
+    """
+    Compute AUC-ROC for binary (benign vs. malignant) classification.
+
+    Uses the malignant class probability (softmax of logit[:,1]) as the
+    positive-class score. AUC-ROC is the primary metric for medical image
+    classification papers and is threshold-independent.
+
+    Args:
+        discriminator_logits: [N, num_classes] or [N, num_classes+1] logits.
+                              Only the first two columns (benign, malignant) are used.
+        labels: [N] ground-truth labels (0=benign, 1=malignant)
+
+    Returns:
+        AUC-ROC scalar in [0, 1]. Returns 0.5 (random) if only one class present.
+    """
+    from sklearn.metrics import roc_auc_score
+
+    scores = torch.softmax(discriminator_logits[:, :2], dim=1)[:, 1]
+    scores = scores.detach().cpu().numpy()
+    labels_np = labels.cpu().numpy()
+
+    if len(np.unique(labels_np)) < 2:
+        return 0.5
+
+    return float(roc_auc_score(labels_np, scores))
 
 
 def compute_class_wise_accuracy(

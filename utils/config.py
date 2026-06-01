@@ -98,6 +98,25 @@ class OutputConfig(BaseModel):
         extra = "forbid"
 
 
+class DINOConfig(BaseModel):
+    """DINOv2 feature matching configuration."""
+
+    model: str = Field(default="dinov2_vitb14")
+    input_size: int = Field(default=112, ge=56, le=224)
+    projection_head_path: str = Field(default="outputs/projection_head.pt")
+    lambda_cc: float = Field(default=0.1, ge=0.0, le=10.0)
+    lambda_var: float = Field(default=0.0, ge=0.0, le=10.0)
+    pretrain_epochs: int = Field(default=100, ge=1, le=10000)
+    pretrain_lr: float = Field(default=0.001, gt=0.0, le=0.1)
+    supcon_temperature: float = Field(default=0.15, gt=0.0, le=1.0)
+    lambda_cc_warmup_start: int = Field(default=50, ge=0)
+    lambda_cc_warmup_epochs: int = Field(default=50, ge=1)
+
+    class Config:
+        """Pydantic config."""
+        extra = "forbid"
+
+
 class SGANConfig(BaseModel):
     """Complete SGAN configuration."""
 
@@ -107,6 +126,7 @@ class SGANConfig(BaseModel):
     discriminator: DiscriminatorConfig
     training: TrainingConfig
     output: OutputConfig
+    dino: Optional[DINOConfig] = Field(default=None)
 
     class Config:
         """Pydantic config."""

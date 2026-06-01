@@ -2,16 +2,17 @@
 
 import subprocess
 import re
+import sys
 
 
 def compute_fid(real_dir, fake_dir):
 
     cmd = [
-        "python",
+        sys.executable,   # use the same Python that's running this script
         "-m",
         "pytorch_fid",
         real_dir,
-        fake_dir
+        fake_dir,
     ]
 
     try:

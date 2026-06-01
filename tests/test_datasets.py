@@ -82,13 +82,16 @@ class TestLabeledMelanomaDataset:
         """Test corrupted image raises error on load."""
         dataset = LabeledMelanomaDataset(dataset_dir)
 
-        # Corrupt an image
-        benign_files = list((Path(dataset_dir) / "benign").glob("*.jpg"))
-        with open(benign_files[0], 'w') as f:
+        # Sort to match the dataset's sorted ordering — corrupt the first one
+        benign_files = sorted((Path(dataset_dir) / "benign").glob("*.jpg"))
+        with open(str(benign_files[0]), 'w') as f:
             f.write("corrupted data")
 
+        # Find which dataset index corresponds to this path and test it
+        corrupted_path = str(benign_files[0])
+        idx = next(i for i, (p, _) in enumerate(dataset.samples) if p == corrupted_path)
         with pytest.raises(RuntimeError):
-            dataset[0]
+            dataset[idx]
 
 
 class TestUnlabeledMelanomaDataset:
