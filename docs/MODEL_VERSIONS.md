@@ -1,56 +1,67 @@
-# Model Versions — Generator Training Signal
+# Model Variants — Generator Training Signal
 
-This document tracks the three iterations of the SGAN generator objective for the
-melanoma augmentation project. The discriminator is a K+1 semi-supervised classifier
-throughout (`[P(benign), P(malignant), P(fake)]`); what changes across versions is
-**how the generator is trained** and **how the discriminator is balanced against it**.
+This document tracks the method variants explored for the melanoma SGAN augmentation
+project. The discriminator is a K+1 semi-supervised classifier throughout
+(`[P(benign), P(malignant), P(fake)]`); what changes across variants is **how the
+generator is trained** and **how the discriminator is regularized against it**.
 
-All image data is 32×32 native, upsampled to 64×64 for training. 200 labeled
-(100 benign / 100 malignant) + 7018 unlabeled images.
+Data: 32×32 native, upsampled to 64×64. 200 labeled (100 benign / 100 malignant)
++ 7018 unlabeled images.
 
----
+## Naming (paper ↔ dev)
 
-## v1 — Vanilla SGAN (Salimans-style feature matching)
+| Paper name | Method | Dev tag | Role |
+|---|---|---|---|
+| **FM-SGAN** | Salimans discriminator feature-matching SGAN | v1 | baseline |
+| **DINO-Mean** | frozen-DINO batch-mean matching as the sole generator signal | v2 | negative result |
+| **Adv-R1** | adversarial SGAN with R1-regularized, rebalanced discriminator | v3.1 | backbone / ablation baseline |
+| **DINO-MMD** *(Ours)* | Adv-R1 + per-sample DINO Maximum Mean Discrepancy | Run 2 | **proposed method** |
 
-**Generator loss:** discriminator feature matching.
-```
-loss_G = || mean(D_features(real)) - mean(D_features(fake)) ||_1
-```
-where `D_features` are the discriminator's penultimate activations
-([B, 1280, 4, 4] = 20,480-dim).
+Intended paper usage: *"We evaluate **DINO-MMD** against the **FM-SGAN** baseline and the
+**Adv-R1** ablation (DINO-MMD with the MMD term removed). **DINO-Mean** is reported as a
+negative result establishing that naïve distribution-mean matching is insufficient."*
 
-**Discriminator:** `feature_maps=160` (~17.3M params), `lr_d=1e-4`.
-
-**Rationale:** Standard Salimans et al. (2016) recipe. The generator matches the
-*discriminator's own* intermediate feature statistics rather than directly maximizing
-the fooling objective, which is more stable than naive adversarial G loss.
-
-**Status:** Baseline. The feature-matching target co-adapts with the discriminator,
-so it is a moving (but informative) signal. Never the research contribution — it's
-the reference point the project aimed to beat.
+The discriminator configuration `Adv-R1` is the shared backbone for both Adv-R1 and
+DINO-MMD; they differ only by the generator's `dino_mmd_weight` (0 vs. >0).
 
 ---
 
-## v2 — Frozen DINOv2 batch-mean matching  ❌ FAILED
-
-**Idea (intended contribution):** Replace the discriminator's *learned* features with
-a *frozen foundation-model* feature space. Project DINOv2 patch tokens through a small
-head pre-trained with Supervised Contrastive loss on the 200 labeled images, then match
-the mean projection of real vs. fake batches.
+## FM-SGAN (baseline) — discriminator feature matching
 
 **Generator loss:**
 ```
-proj = DINOProjectionHead( mean_patch_tokens( DINOv2(x @ 112px) ) )   # [B, 256], L2-normed
-loss_G = || mean(proj(real)) - mean(proj(fake)) ||_1                  # batch-mean L1
+loss_G = || mean(D_features(real)) - mean(D_features(fake)) ||_1
+```
+`D_features` = discriminator penultimate activations ([B, 1280, 4, 4] = 20,480-dim).
+
+**Discriminator:** `feature_maps=160` (~17.3M params), `lr_d=1e-4`.
+
+**Rationale:** Standard Salimans et al. (2016) recipe — the generator matches the
+*discriminator's own* feature statistics rather than directly maximizing the fooling
+objective. Reference point the project aims to beat. (Note: in this project FM-SGAN was
+never run to a verified-good FID; an earlier attempt was interrupted with no checkpoints.)
+
+---
+
+## DINO-Mean (negative result) — frozen-DINO batch-mean matching  ❌
+
+**Idea (original intended contribution):** Replace the discriminator's *learned* features
+with a *frozen foundation-model* feature space. Project DINOv2 patch tokens through a small
+head pre-trained with Supervised Contrastive loss on the 200 labeled images, then match the
+mean projection of real vs. fake batches.
+
+**Generator loss:**
+```
+proj   = DINOProjectionHead( mean_patch_tokens( DINOv2(x @ 112px) ) )   # [B, 256], L2-normed
+loss_G = || mean(proj(real)) - mean(proj(fake)) ||_1                    # batch-mean L1
        + λ_cc · Σ_c || anchor_c - confidence_weighted_mean(proj(fake), w_c) ||_1
 ```
-`λ_cc` warmed up 0→0.1 over epochs 50–100. No adversarial term in G's objective.
+`λ_cc` warmed 0→0.1 over epochs 50–100. **No adversarial term in G's objective.**
 
-**Discriminator:** unchanged from v1 (`feature_maps=160`, ~17.3M params, `lr_d=1e-4`).
-Trained every step (supervised + unlabeled-real + fake losses) but its verdict
-**never fed back to the generator** except as detached softmax weights on the anchors.
+**Discriminator:** unchanged from FM-SGAN (`feature_maps=160`, `lr_d=1e-4`). Trained every
+step but its verdict **never fed back to G** except as detached softmax weights on anchors.
 
-**Result — full 600-epoch run (archived in `outputs/archive_run1_dino_meanmatch/`):**
+**Result — full 600-epoch run** (archived in `outputs/archive_run1_dino_meanmatch/`):
 
 | Metric | Value | Reading |
 |---|---|---|
@@ -58,78 +69,93 @@ Trained every step (supervised + unlabeled-real + fake losses) but its verdict
 | D labeled accuracy | 99.96% | memorized the 200 labeled images |
 | D AUC-ROC (train) | 1.000 | overfit |
 | `Loss/Fake` | **0.000 from epoch 50** | D detects every fake with P(fake)=1.0 |
-| G loss | 0.011, stable | **misleading** — see below |
-| Generated images | colored checkerboard noise, no lesion structure | |
+| G loss | 0.011, stable | **misleading** (see below) |
+| Generated images | colored checkerboard noise | no lesion structure |
 
-**Root cause (diagnosed, not guessed):**
-1. **Adversarial signal died at epoch 50.** The 17M-param discriminator memorized the
-   labeled set and flagged every fake as fake with P(fake)=1.0 (margin 0.99 vs. real).
-   But this never mattered for G, because —
-2. **G's only objective was batch-mean DINO matching, which is underdetermined.**
-   Matching the *mean of patch-mean* projections collapses `256 × B` numbers into a
-   single 256-d vector. A checkerboard pattern can satisfy "make your batch average
-   embedding ≈ this target." There was **zero per-sample realism pressure** anywhere.
-   G=0.011 only meant "your average embedding matches" — it said nothing about whether
-   any individual image looked real.
-3. **Checkerboard is signal-driven, not architectural.** The generator uses
-   `ConvTranspose2d(k=4, s=2, p=1)` — the recommended low-checkerboard DCGAN config.
-   Nothing in the loss penalized local structure, so artifacts were never corrected.
+**Root cause (diagnosed):**
+1. **Adversarial signal died at epoch 50** — the 17M-param D memorized the labeled set,
+   flagging every fake as fake (P(fake)=1.0, margin 0.99 vs. real). Irrelevant to G, because—
+2. **G's only objective was batch-mean DINO matching, which is underdetermined.** Matching
+   the *mean of patch-mean* projections collapses `256 × B` numbers into one 256-d vector;
+   a checkerboard satisfies it. **Zero per-sample realism pressure** anywhere. G=0.011 only
+   meant "your average embedding matches," not that any image looked real.
+3. **Checkerboard is signal-driven, not architectural** — the generator uses
+   `ConvTranspose2d(k=4, s=2, p=1)`, the recommended low-checkerboard config. Nothing in the
+   loss penalized local structure.
 
-**Verdict:** Distributional *mean*-matching alone is insufficient to drive realistic
-generation. This is a genuine negative result and is kept for the paper.
+**Verdict / paper takeaway:** distribution-*mean* matching alone cannot drive realistic
+generation. Kept as a negative result.
 
 ---
 
-## v3 — Adversarial + per-sample DINO MMD, rebalanced D  ✅ CURRENT
+## Adv-R1 (backbone / ablation baseline) — adversarial SGAN, R1-stabilized D  ✅
 
-Fixes both failure modes from v2: restores live adversarial pressure **and** makes the
-DINO term operate per-sample instead of on the batch mean. Discriminator is rebalanced
-so it cannot trivially win.
+Fixes DINO-Mean's two failures: restores live per-sample adversarial pressure, and makes the
+discriminator a **stable, informative** critic via R1 regularization instead of brittle
+capacity tuning.
 
-**Generator loss:**
+**Generator loss (MMD term off):**
+```
+loss_G = adversarial_weight · L_adv
+L_adv  = -mean( log Σ_{c<K} softmax(D(fake))[c] ) = -mean( log P(real) )     # non-saturating
+```
+Computed in log-space (`logsumexp`); gives strong gradient *even when D is confident the
+input is fake* — exactly the regime where DINO-Mean stalled.
+
+**Discriminator stabilization — the path to a healthy critic:**
+
+| Knob | DINO-Mean | (v3.0 attempt) | **Adv-R1 (v3.1)** | Why |
+|---|---|---|---|---|
+| `feature_maps` | 160 | 64 | **128** | 160 memorized; 64 collapsed; 128 is the middle ground |
+| `lr_d / lr_g` | 1e-4 / 2e-4 | 5e-5 / 2e-4 | **3e-4 / 1e-4 (TTUR)** | D fast enough to stay informative |
+| `beta1` | 0.5 | 0.5 | **0.0** | standard for R1-regularized GANs |
+| R1 penalty | — | — | **γ=10, every 16 steps** | smooths D's real/fake boundary |
+
+**R1 gradient penalty** (`r1_penalty`, Mescheder et al. 2018): penalizes
+`E_x[ ||∇_x s(x)||² ]` where `s(x) = logsumexp(real-class logits) − fake-class logit` is the
+discriminator's realness score on real images. fp32 double-backward, applied lazily every 16
+steps with StyleGAN2 `(γ/2 × interval)` compensation. This is what prevents *both* failure
+modes — over-sharpening (memorization, margin→0.99) and collapse (margin→0.01).
+
+**Why a tuning detour (v3.0 → v3.1) happened:** the first rebalance over-corrected — cutting D
+to 64 maps + halved LR made D too weak to separate real from fake (margin 0.013), so the
+adversarial gradient became noise and the generator drifted back to checkerboard (FID 464).
+R1 + a 128-map D + TTUR is the stable fix. (v3.0 is a dev tuning step, not a paper variant.)
+
+**Validation (25-epoch smoke):**
+
+| | DINO-Mean | v3.0 (too weak) | **Adv-R1** |
+|---|---|---|---|
+| D real/fake margin | 0.99 (memorized) | 0.013 (collapsed) | **0.448 (healthy)** |
+| D P(fake): fake / real | 1.0 / 0.01 | 0.34 / 0.33 | **0.91 / 0.46** |
+| D labeled acc | 99.96% | 0.61 | 0.76 |
+| Generated images | checkerboard | checkerboard | **lesion-like pigmented blobs** |
+| FID @ ep24 | (≈449 @ ep49) | 464 | 448 (smooth/low-texture; structure now correct) |
+
+The checkerboard is eliminated for the first time and the discriminator is healthy. FID at 25
+epochs is still high because early samples are smooth and lack fine texture; unlike DINO-Mean
+and v3.0 (stuck on checkerboard), the structure is now correct, so FID has a real path to drop
+over a full run. The full Adv-R1 run is the test of whether it does.
+
+---
+
+## DINO-MMD *(proposed method)* — Adv-R1 + per-sample DINO MMD
+
+Adds the project's actual contribution on top of the working Adv-R1 backbone:
+
 ```
 loss_G = adversarial_weight · L_adv
        + dino_mmd_weight     · MMD_rbf( proj(real_batch), proj(fake_batch) )
 ```
 
-- **`L_adv` — non-saturating adversarial loss** (`adversarial_generator_loss`):
-  ```
-  L_adv = -mean( log Σ_{c<K} softmax(D(fake))[c] ) = -mean( log P(real) )
-  ```
-  Computed in log-space via `logsumexp`. Gives strong gradient *even when D is confident
-  the input is fake* — exactly the regime where v2 stalled. This is per-sample realism
-  pressure routed through the discriminator.
+- **`MMD_rbf`** (`mmd_loss`): multi-bandwidth RBF-kernel Maximum Mean Discrepancy between the
+  *sets* of individual DINO projections (not their means). Unlike DINO-Mean's linear-kernel-
+  equivalent mean matching, the RBF kernel matches the **full distribution**, pressuring every
+  fake toward the real manifold. Bandwidths set per call via the median heuristic.
 
-- **`MMD_rbf` — per-sample distribution matching** (`mmd_loss`): multi-bandwidth RBF-kernel
-  Maximum Mean Discrepancy between the *sets* of individual DINO projections (not their
-  means). Unlike v2's linear-kernel-equivalent mean matching, the RBF kernel matches the
-  full distribution, pressuring every fake toward the real manifold. Bandwidths set per
-  call via the median heuristic so the loss self-scales to the embedding geometry.
-
-**Discriminator rebalanced:**
-| Knob | v2 | v3 | Why |
-|---|---|---|---|
-| `feature_maps` | 160 | **64** | 17.3M → 2.78M params; stop instant memorization |
-| `lr_discriminator` | 1e-4 | **5e-5** | let G keep pace |
-
-**Sequenced rollout (config `generator_loss`):**
-- **Run 1 (current default):** `adversarial_weight=1.0, dino_mmd_weight=0.0`
-  → pure adversarial SGAN baseline. Goal: confirm FID drops from ~400 into a sane range
-  with the rebalanced discriminator. DINO is not even loaded when `dino_mmd_weight=0`.
-- **Run 2 (contribution):** set `dino_mmd_weight=0.3` (or sweep) to layer the per-sample
-  DINO MMD term on top of the working baseline, and measure the improvement over Run 1.
-
-**Smoke test (3 epochs) vs. v2:**
-
-| | v2 (failed) | v3 Run 1 |
-|---|---|---|
-| D params | 17.3M | 2.78M |
-| G adversarial loss | 0.000 (dead) | 0.31–0.45 (alive, oscillating) |
-| D loss | 0.32 (D dominating) | ~2.6 (competitive) |
-| Throughput | 1.15 s/it | 3.0 it/s (~9 s/epoch) |
-
-The adversarial loss oscillating at ~0.4 (⇒ D assigns P(real)≈0.67 to fakes) confirms
-the generator is competitively fooling the discriminator — the dynamic v2 never had.
+**Rollout:** Adv-R1 is `dino_mmd_weight=0.0`; DINO-MMD sets `dino_mmd_weight=0.3` (or sweep).
+DINO is only loaded when the weight is > 0. The improvement of DINO-MMD over Adv-R1 is the
+headline ablation.
 
 ---
 
@@ -137,10 +163,10 @@ the generator is competitively fooling the discriminator — the dynamic v2 neve
 
 | Component | File |
 |---|---|
-| `adversarial_generator_loss`, `mmd_loss` (v3) | [training/losses.py](../training/losses.py) |
-| `dino_feature_matching_loss`, `confidence_weighted_dino_loss` (v2) | [training/losses.py](../training/losses.py) |
-| `feature_matching_loss` (v1) | [training/losses.py](../training/losses.py) |
+| `adversarial_generator_loss`, `mmd_loss`, `r1_penalty` (Adv-R1 / DINO-MMD) | [training/losses.py](../training/losses.py) |
+| `dino_feature_matching_loss`, `confidence_weighted_dino_loss` (DINO-Mean) | [training/losses.py](../training/losses.py) |
+| `feature_matching_loss` (FM-SGAN) | [training/losses.py](../training/losses.py) |
 | Generator step / loss composition | [training/trainer.py](../training/trainer.py) |
-| `GeneratorLossConfig`, `DINOConfig` | [utils/config.py](../utils/config.py) |
-| Weights, D rebalance | [configs/config.yaml](../configs/config.yaml) |
-| Failed v2 run artifacts | `outputs/archive_run1_dino_meanmatch/` |
+| `GeneratorLossConfig`, `DINOConfig`, R1 knobs in `TrainingConfig` | [utils/config.py](../utils/config.py) |
+| Loss weights, D rebalance, TTUR, R1 | [configs/config.yaml](../configs/config.yaml) |
+| DINO-Mean (negative result) run artifacts | `outputs/archive_run1_dino_meanmatch/` |
