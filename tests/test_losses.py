@@ -14,6 +14,7 @@ from training.losses import (
     confidence_weighted_dino_loss,
     adversarial_generator_loss,
     mmd_loss,
+    r1_penalty,
 )
 
 
@@ -260,3 +261,31 @@ class TestV3GeneratorLosses:
         assert torch.isfinite(leaf.grad).all()
         # real_proj is detached inside mmd_loss → receives no gradient
         assert real.grad is None
+
+    # ── r1_penalty ────────────────────────────────────────────────────
+
+    def test_r1_penalty_scalar_nonneg_and_differentiable(self):
+        """R1 is a non-negative scalar that backprops to discriminator params."""
+        from models.discriminator import Discriminator
+
+        D = Discriminator(feature_maps=32, channels=3, num_classes=2)
+        real = torch.randn(8, 3, 64, 64)
+        r1 = r1_penalty(D, real, num_classes=2)
+        assert r1.shape == torch.Size([])
+        assert r1.item() >= 0.0
+        # Outer backward (penalty differentiable w.r.t. D params) must work.
+        r1.backward()
+        grads = [p.grad for p in D.parameters() if p.grad is not None]
+        assert len(grads) > 0
+        assert all(torch.isfinite(g).all() for g in grads)
+
+    def test_r1_penalty_does_not_mutate_input(self):
+        """The input real tensor is not modified (grad enabled on an internal copy)."""
+        from models.discriminator import Discriminator
+
+        D = Discriminator(feature_maps=32, channels=3, num_classes=2)
+        real = torch.randn(8, 3, 64, 64)
+        snapshot = real.clone()
+        _ = r1_penalty(D, real, num_classes=2)
+        assert real.grad is None
+        assert torch.equal(real, snapshot)

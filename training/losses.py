@@ -73,6 +73,46 @@ def generator_loss(logits):
     return loss
 
 
+def r1_penalty(
+    discriminator,
+    real_images: torch.Tensor,
+    num_classes: int,
+) -> torch.Tensor:
+    """
+    R1 gradient penalty (Mescheder et al., 2018) for the K+1 discriminator.
+
+    Penalizes the squared gradient norm of the discriminator's real/fake decision
+    with respect to *real* inputs:
+        R1 = E_x[ || ∇_x s(x) ||^2 ]
+    where s(x) = logsumexp(real-class logits) - fake-class logit is the scalar
+    "realness" score. This keeps the discriminator's decision boundary smooth on
+    the real-data manifold, which prevents both the runaway over-confidence that
+    let v2's D memorize (margin 0.99) and the symmetric collapse where D can no
+    longer separate real from fake (margin 0.01). It is the standard modern
+    stabilizer for adversarial training.
+
+    Computed in fp32 (autocast disabled) with create_graph=True so the penalty
+    itself is differentiable. Caller typically applies it lazily (every N steps)
+    and weights it by gamma/2.
+
+    Args:
+        discriminator: the D module (called on real_images).
+        real_images:   [B, C, H, W] real images. A grad-enabled copy is made
+                       internally; the input is not modified.
+        num_classes:   K (the fake class is index K).
+    Returns:
+        Scalar penalty (mean squared gradient norm).
+    """
+    x = real_images.detach().clone().requires_grad_(True)
+    with torch.autocast(device_type=x.device.type, enabled=False):
+        logits = discriminator(x.float())
+        score = torch.logsumexp(logits[:, :num_classes], dim=1) - logits[:, num_classes]
+    grad = torch.autograd.grad(
+        outputs=score.sum(), inputs=x, create_graph=True
+    )[0]
+    return grad.pow(2).flatten(1).sum(dim=1).mean()
+
+
 def adversarial_generator_loss(
     logits_fake: torch.Tensor,
     num_classes: int,

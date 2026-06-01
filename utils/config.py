@@ -67,6 +67,10 @@ class TrainingConfig(BaseModel):
     beta1: float = Field(default=0.5, ge=0, le=1)
     beta2: float = Field(default=0.999, ge=0, le=1)
     num_workers: int = Field(default=8, ge=0, le=64)
+    r1_gamma: float = Field(default=0.0, ge=0.0, le=100.0,
+                            description="R1 gradient-penalty weight on D (0 disables)")
+    r1_interval: int = Field(default=16, ge=1, le=256,
+                             description="Apply R1 every N steps (lazy regularization)")
     lr_scheduler_type: str = Field(default="none", description="Learning rate scheduler type")
     lr_decay_steps: int = Field(default=100, ge=1)
     lr_decay_factor: float = Field(default=0.95, gt=0, le=1)

@@ -25,6 +25,7 @@ from training.losses import (
     confidence_weighted_dino_loss,
     adversarial_generator_loss,
     mmd_loss,
+    r1_penalty,
 )
 from evaluation.metrics import compute_auc_roc
 from models.projection_head import DINOProjectionHead
@@ -269,6 +270,7 @@ class Trainer:
         total_loss_fm = 0.0
         total_loss_adv = 0.0
         total_loss_mmd = 0.0
+        total_loss_r1 = 0.0
         total_correct = 0
         total_labeled = 0
         all_logits_labeled: list = []
@@ -328,6 +330,20 @@ class Trainer:
 
                         # Combined discriminator loss
                         loss_d = loss_sup + loss_unlab + loss_fake_val
+
+                    # R1 gradient penalty (lazy: every r1_interval steps).
+                    # Stabilizes D's real/fake boundary — prevents both the
+                    # memorization (margin→0.99) and the collapse (margin→0.01)
+                    # failure modes. Computed in fp32 outside autocast.
+                    r1_gamma = self.config.training.r1_gamma
+                    if r1_gamma > 0.0 and (step % self.config.training.r1_interval == 0):
+                        r1 = r1_penalty(
+                            self.D, unlabeled_batch, self.config.dataset.num_classes
+                        )
+                        # Lazy compensation (× interval) keeps the time-averaged
+                        # penalty equal to (gamma/2)·r1 per step (StyleGAN2 convention).
+                        loss_d = loss_d + (r1_gamma / 2.0) * r1 * self.config.training.r1_interval
+                        total_loss_r1 += float(r1.detach())
 
                     # Backward pass with gradient scaling
                     self.scaler.scale(loss_d).backward()
@@ -439,6 +455,8 @@ class Trainer:
         avg_loss_fm = total_loss_fm / num_batches
         avg_loss_adv = total_loss_adv / num_batches
         avg_loss_mmd = total_loss_mmd / num_batches
+        r1_count = max(1, num_batches // max(1, self.config.training.r1_interval))
+        avg_loss_r1 = total_loss_r1 / r1_count
         d_acc = total_correct / max(total_labeled, 1)
 
         # Log to TensorBoard
@@ -450,6 +468,7 @@ class Trainer:
         self.writer.add_scalar("Loss/FeatureMatching", avg_loss_fm, epoch)
         self.writer.add_scalar("Loss/G_Adversarial", avg_loss_adv, epoch)
         self.writer.add_scalar("Loss/G_DINO_MMD", avg_loss_mmd, epoch)
+        self.writer.add_scalar("Loss/D_R1", avg_loss_r1, epoch)
         # AUC-ROC over all labeled batches seen this epoch
         if all_logits_labeled:
             all_logits_cat = torch.cat(all_logits_labeled, dim=0)
