@@ -90,7 +90,8 @@ def train(config: SGANConfig) -> None:
         batch_size=config.training.batch_size,
         shuffle=True,
         num_workers=config.training.num_workers,
-        pin_memory=True
+        pin_memory=True,
+        persistent_workers=config.training.num_workers > 0,
     )
 
     unlabeled_loader = DataLoader(
@@ -98,7 +99,9 @@ def train(config: SGANConfig) -> None:
         batch_size=config.training.batch_size,
         shuffle=True,
         num_workers=config.training.num_workers,
-        pin_memory=True
+        pin_memory=True,
+        persistent_workers=config.training.num_workers > 0,
+        drop_last=True,
     )
 
     logger.info(f"Data loaders created with batch size: {config.training.batch_size}")

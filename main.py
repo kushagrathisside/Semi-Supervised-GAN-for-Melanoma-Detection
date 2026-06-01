@@ -26,6 +26,7 @@ from utils.config import SGANConfig
 # Enable TF32 for faster training on compatible GPUs
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
+torch.backends.cudnn.benchmark = True   # auto-tune conv algorithms for fixed input sizes
 
 logger = get_logger(__name__)
 
