@@ -12,6 +12,8 @@ from training.losses import (
     feature_matching_loss,
     dino_feature_matching_loss,
     confidence_weighted_dino_loss,
+    adversarial_generator_loss,
+    mmd_loss,
 )
 
 
@@ -194,3 +196,67 @@ class TestDINOLosses:
         # Anchors are explicitly detached inside the loss — they must have no grad
         assert anchors[0].grad is None
         assert anchors[1].grad is None
+
+
+class TestV3GeneratorLosses:
+    """Test suite for the v3 generator objective (adversarial + per-sample MMD)."""
+
+    # ── adversarial_generator_loss ────────────────────────────────────
+
+    def test_adv_scalar_and_nonneg(self):
+        """Loss is a non-negative scalar."""
+        logits = torch.randn(16, 3)
+        loss = adversarial_generator_loss(logits, num_classes=2)
+        assert loss.shape == torch.Size([])
+        assert loss.item() >= 0.0
+
+    def test_adv_large_when_d_confident_fake(self):
+        """When D is certain inputs are fake, the loss is large (strong signal)."""
+        logits = torch.zeros(16, 3)
+        logits[:, 2] = 20.0  # fake-class logit dominates → P(fake)≈1
+        loss = adversarial_generator_loss(logits, num_classes=2)
+        assert loss.item() > 5.0
+
+    def test_adv_small_when_d_fooled(self):
+        """When D thinks fakes are real, the loss is near zero."""
+        logits = torch.zeros(16, 3)
+        logits[:, 0] = 20.0  # a real-class logit dominates → P(fake)≈0
+        loss = adversarial_generator_loss(logits, num_classes=2)
+        assert loss.item() < 1e-3
+
+    def test_adv_gradient_flows_and_finite(self):
+        """Gradient reaches the logits and contains no NaN/Inf even when saturated."""
+        logits = torch.zeros(16, 3, requires_grad=True)
+        with torch.no_grad():
+            logits[:, 2] = 20.0
+        loss = adversarial_generator_loss(logits, num_classes=2)
+        loss.backward()
+        assert logits.grad is not None
+        assert torch.isfinite(logits.grad).all()
+
+    # ── mmd_loss ──────────────────────────────────────────────────────
+
+    def test_mmd_zero_for_identical_sets(self):
+        """MMD of a set with itself is ~0."""
+        a = F.normalize(torch.randn(48, 256), dim=1)
+        loss = mmd_loss(a, a.clone())
+        assert abs(loss.item()) < 1e-4
+
+    def test_mmd_positive_for_shifted_sets(self):
+        """MMD is clearly positive for well-separated distributions."""
+        a = F.normalize(torch.randn(48, 256), dim=1)
+        b = F.normalize(torch.randn(48, 256) + 5.0, dim=1)
+        loss = mmd_loss(a, b)
+        assert loss.item() > 0.1
+
+    def test_mmd_gradient_flows_to_fake_only(self):
+        """Gradient flows to fake_proj; real_proj is detached inside."""
+        real = F.normalize(torch.randn(48, 256), dim=1).requires_grad_(True)
+        leaf = torch.randn(32, 256, requires_grad=True)
+        fake = F.normalize(leaf, dim=1)
+        loss = mmd_loss(real, fake)
+        loss.backward()
+        assert leaf.grad is not None
+        assert torch.isfinite(leaf.grad).all()
+        # real_proj is detached inside mmd_loss → receives no gradient
+        assert real.grad is None

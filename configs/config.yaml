@@ -38,7 +38,9 @@ generator:
 
 discriminator:
 
-  feature_maps: 160
+  feature_maps: 64           # v3: cut from 160 (17M→2.7M params). The 160-map D
+                             # memorized the 200 labeled images by epoch 50
+                             # (P(fake)=1.0, margin 0.99), starving the generator.
 
 
 # =========================================
@@ -51,7 +53,7 @@ training:
   epochs: 600
 
   lr_generator: 0.0002
-  lr_discriminator: 0.0001
+  lr_discriminator: 0.00005   # v3: halved so D stops winning instantly
 
   beta1: 0.5
   beta2: 0.999
@@ -71,6 +73,25 @@ output:
 
   save_interval: 5
   sample_interval: 1
+
+
+# =========================================
+# Generator Loss Configuration (v3)
+# =========================================
+# loss_G = adversarial_weight * non-saturating adversarial loss
+#        + dino_mmd_weight    * per-sample RBF-MMD(DINO real, DINO fake)
+#
+# Sequenced plan:
+#   Run 1 (this config): adversarial_weight=1.0, dino_mmd_weight=0.0
+#       → pure adversarial SGAN baseline. Goal: confirm FID drops from ~400
+#         to a sane range (realistic images) with the rebalanced discriminator.
+#   Run 2 (contribution): set dino_mmd_weight=0.3 (or sweep) to add the
+#       per-sample DINO distribution-matching term on top of the working baseline.
+
+generator_loss:
+
+  adversarial_weight: 1.0
+  dino_mmd_weight: 0.0
 
 
 # =========================================

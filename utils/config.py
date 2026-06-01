@@ -84,6 +84,28 @@ class TrainingConfig(BaseModel):
         extra = "forbid"
 
 
+class GeneratorLossConfig(BaseModel):
+    """
+    Generator objective configuration (v3).
+
+    The generator loss is a weighted sum of:
+      - adversarial_weight * non-saturating adversarial loss (per-sample realism
+        pressure via the discriminator's real/fake verdict), and
+      - dino_mmd_weight * per-sample RBF-MMD between DINO projections of real and
+        fake batches (distribution matching in foundation-model feature space).
+
+    Setting dino_mmd_weight=0 gives a pure adversarial SGAN baseline (v3 Run 1).
+    Setting adversarial_weight=0 reproduces a DINO-only generator (ablation).
+    """
+
+    adversarial_weight: float = Field(default=1.0, ge=0.0, le=100.0)
+    dino_mmd_weight: float = Field(default=0.0, ge=0.0, le=100.0)
+
+    class Config:
+        """Pydantic config."""
+        extra = "forbid"
+
+
 class OutputConfig(BaseModel):
     """Output configuration."""
 
@@ -126,6 +148,7 @@ class SGANConfig(BaseModel):
     discriminator: DiscriminatorConfig
     training: TrainingConfig
     output: OutputConfig
+    generator_loss: GeneratorLossConfig = Field(default_factory=GeneratorLossConfig)
     dino: Optional[DINOConfig] = Field(default=None)
 
     class Config:

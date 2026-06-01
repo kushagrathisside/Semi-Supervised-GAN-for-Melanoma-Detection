@@ -23,6 +23,8 @@ from training.losses import (
     feature_matching_loss,
     dino_feature_matching_loss,
     confidence_weighted_dino_loss,
+    adversarial_generator_loss,
+    mmd_loss,
 )
 from evaluation.metrics import compute_auc_roc
 from models.projection_head import DINOProjectionHead
@@ -111,11 +113,15 @@ class Trainer:
         self.best_d_acc = 0.0      # labeled-set classification accuracy
         self.best_epoch = -1
 
-        # DINO feature matching (optional — only active when config.dino is set)
+        # DINO feature matching (optional). Only loaded when the DINO MMD term is
+        # actually weighted > 0 — a pure adversarial run skips it entirely (no
+        # wasted VRAM / load time).
         self.dino = None
         self.proj_head = None
         self.class_anchors: Dict[int, torch.Tensor] = {}
-        self._use_dino = config.dino is not None
+        self._use_dino = (
+            config.dino is not None and config.generator_loss.dino_mmd_weight > 0.0
+        )
 
         if self._use_dino:
             self._init_dino()
@@ -261,6 +267,8 @@ class Trainer:
         total_loss_unlab = 0.0
         total_loss_fake = 0.0
         total_loss_fm = 0.0
+        total_loss_adv = 0.0
+        total_loss_mmd = 0.0
         total_correct = 0
         total_labeled = 0
         all_logits_labeled: list = []
@@ -345,47 +353,45 @@ class Trainer:
                 )
                 fake_imgs = self.G(z)
 
+                loss_adv = torch.zeros((), device=self.device)
+                loss_mmd = torch.zeros((), device=self.device)
                 try:
                     with autocast(device_type="cuda" if self.device.type == "cuda" else "cpu"):
-                        if self._use_dino:
-                            # ── DINO-guided feature matching ────────────────────
-                            # Real: no grad needed (reference distribution)
-                            proj_real_mean = self._get_dino_proj(
-                                unlabeled_batch, no_grad=True
-                            ).mean(0)
+                        gl_cfg = self.config.generator_loss
+                        loss_g = torch.zeros((), device=self.device)
 
-                            # Fake: grad must flow through DINO → proj_head → fake → G
-                            proj_fake = self._get_dino_proj(fake_imgs, no_grad=False)
-
-                            loss_g = dino_feature_matching_loss(
-                                proj_real_mean,
-                                proj_fake,
-                                lambda_var=self.config.dino.lambda_var,
+                        # ── Adversarial term (per-sample realism via D) ─────────
+                        # Grad MUST flow fake_imgs → G (no detach here).
+                        if gl_cfg.adversarial_weight > 0.0:
+                            logits_fake_g = self.D(fake_imgs)
+                            loss_adv = adversarial_generator_loss(
+                                logits_fake_g, self.config.dataset.num_classes
                             )
+                            loss_g = loss_g + gl_cfg.adversarial_weight * loss_adv
 
-                            # Class-conditional term (warmed up, zero in early epochs)
-                            lcc = self._effective_lambda_cc(epoch)
-                            if lcc > 0.0:
-                                # Discriminator confidence as soft class weights (detached)
-                                fake_probs = F.softmax(
-                                    self.D(fake_imgs.detach())[:, :self.config.dataset.num_classes],
-                                    dim=-1,
-                                )
-                                loss_g = loss_g + lcc * confidence_weighted_dino_loss(
-                                    proj_fake, self.class_anchors, fake_probs
-                                )
+                        # ── Per-sample DINO MMD term (distribution matching) ────
+                        if self._use_dino and gl_cfg.dino_mmd_weight > 0.0:
+                            # Real: full set of projections, no grad (reference dist)
+                            proj_real = self._get_dino_proj(unlabeled_batch, no_grad=True)
+                            # Fake: grad flows through DINO → proj_head → fake → G
+                            proj_fake = self._get_dino_proj(fake_imgs, no_grad=False)
+                            loss_mmd = mmd_loss(proj_real, proj_fake)
+                            loss_g = loss_g + gl_cfg.dino_mmd_weight * loss_mmd
 
-                            # NaN guard: DINO backprop can produce NaN under heavy AMP scaling
-                            if torch.isnan(loss_g):
-                                logger.warning(f"NaN in DINO generator loss at step {step}; skipping update")
-                                self.optimizer_g.zero_grad()
-                                continue
-
-                        else:
-                            # ── Original discriminator feature matching ──────────
+                        # Fallback: if neither term is active, use the original
+                        # discriminator feature matching so the run still trains.
+                        if gl_cfg.adversarial_weight == 0.0 and (
+                            not self._use_dino or gl_cfg.dino_mmd_weight == 0.0
+                        ):
                             logits_fake, fake_features = self.D(fake_imgs, return_features=True)
                             _, real_features = self.D(unlabeled_batch, return_features=True)
                             loss_g = feature_matching_loss(real_features, fake_features)
+
+                    # NaN guard: DINO/AMP backprop can occasionally produce NaN
+                    if torch.isnan(loss_g):
+                        logger.warning(f"NaN in generator loss at step {step}; skipping update")
+                        self.optimizer_g.zero_grad()
+                        continue
 
                     # Backward + gradient clip (both paths — consistent with D clipping)
                     self.scaler.scale(loss_g).backward()
@@ -405,11 +411,15 @@ class Trainer:
                 total_loss_unlab += loss_unlab.item()
                 total_loss_fake += loss_fake_val.item()
                 total_loss_fm += loss_g.item()
+                total_loss_adv += float(loss_adv)
+                total_loss_mmd += float(loss_mmd)
 
                 # Update progress bar
                 loop.set_postfix({
                     "D": f"{loss_d.item():.3f}",
-                    "G": f"{loss_g.item():.3f}"
+                    "G": f"{loss_g.item():.3f}",
+                    "adv": f"{float(loss_adv):.3f}",
+                    "mmd": f"{float(loss_mmd):.3f}",
                 })
 
         except KeyboardInterrupt:
@@ -427,6 +437,8 @@ class Trainer:
         avg_loss_unlab = total_loss_unlab / num_batches
         avg_loss_fake = total_loss_fake / num_batches
         avg_loss_fm = total_loss_fm / num_batches
+        avg_loss_adv = total_loss_adv / num_batches
+        avg_loss_mmd = total_loss_mmd / num_batches
         d_acc = total_correct / max(total_labeled, 1)
 
         # Log to TensorBoard
@@ -436,6 +448,8 @@ class Trainer:
         self.writer.add_scalar("Loss/UnlabeledReal", avg_loss_unlab, epoch)
         self.writer.add_scalar("Loss/Fake", avg_loss_fake, epoch)
         self.writer.add_scalar("Loss/FeatureMatching", avg_loss_fm, epoch)
+        self.writer.add_scalar("Loss/G_Adversarial", avg_loss_adv, epoch)
+        self.writer.add_scalar("Loss/G_DINO_MMD", avg_loss_mmd, epoch)
         # AUC-ROC over all labeled batches seen this epoch
         if all_logits_labeled:
             all_logits_cat = torch.cat(all_logits_labeled, dim=0)
