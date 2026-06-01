@@ -11,13 +11,13 @@ class SGAN(nn.Module):
 
         super().__init__()
 
-        latent_dim = config["generator"]["latent_dim"]
-        g_maps = config["generator"]["feature_maps"]
+        latent_dim = config.generator.latent_dim
+        g_maps = config.generator.feature_maps
 
-        d_maps = config["discriminator"]["feature_maps"]
+        d_maps = config.discriminator.feature_maps
 
-        num_classes = config["dataset"]["num_classes"]
-        channels = config["dataset"]["num_channels"]
+        num_classes = config.dataset.num_classes
+        channels = config.dataset.num_channels
 
         self.generator = Generator(
             latent_dim,

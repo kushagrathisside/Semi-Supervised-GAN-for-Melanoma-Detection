@@ -161,7 +161,7 @@ def main() -> None:
     # Setup logging
     import logging
     log_level = getattr(logging, args.log_level)
-    setup_logging(log_level=log_level)
+    setup_logging(level=log_level)
 
     logger.info(f"Starting Melanoma SGAN - Mode: {args.mode}")
 
