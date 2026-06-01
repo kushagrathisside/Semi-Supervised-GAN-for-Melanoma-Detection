@@ -52,27 +52,28 @@ def supcon_loss(features: torch.Tensor, labels: torch.Tensor, temperature: float
         Scalar loss.
 
     Numerical notes:
-        - fill_diagonal_(-inf) removes self-similarity from denominator
-        - logsumexp is numerically stable; at τ=0.15 exponents reach ~e^6.67,
-          which is fine in float32 (overflow only above e^88)
+        - The diagonal (self-similarity) is excluded from the denominator by
+          masking with -1e9 (not -inf) before logsumexp. Using -inf causes
+          0 * (-inf) = NaN in the positive-pair product since IEEE 754.
+        - logsumexp is numerically stable across the full temperature range.
     """
     N = features.size(0)
     device = features.device
 
-    # Pairwise cosine similarity matrix (features are already L2-normalized)
     sim = torch.matmul(features, features.T) / temperature  # [N, N]
-    sim.fill_diagonal_(float('-inf'))                        # exclude self
 
-    # Log-softmax over all non-self pairs
-    log_prob = sim - torch.logsumexp(sim, dim=1, keepdim=True)  # [N, N]
+    # Exclude self from denominator: use -1e9 (finite) so log_prob diagonal
+    # is large-negative but finite — avoids 0 * (-inf) = NaN in the loss.
+    self_mask = torch.eye(N, device=device, dtype=torch.bool)
+    log_denom = torch.logsumexp(sim.masked_fill(self_mask, -1e9), dim=1, keepdim=True)
+    log_prob = sim - log_denom  # [N, N]; diagonal is finite but will be zeroed by pos_mask
 
     # Positive mask: same class, not self
     labels = labels.view(-1, 1)
-    pos_mask = (labels == labels.T).float()                 # [N, N]
-    pos_mask.fill_diagonal_(0)
+    pos_mask = (labels == labels.T).float().masked_fill(self_mask, 0)  # [N, N]
 
-    pos_count = pos_mask.sum(dim=1).clamp(min=1)            # [N]
-    loss = -(pos_mask * log_prob).sum(dim=1) / pos_count    # [N]
+    pos_count = pos_mask.sum(dim=1).clamp(min=1)
+    loss = -(pos_mask * log_prob).sum(dim=1) / pos_count
     return loss.mean()
 
 
@@ -195,4 +196,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/config.yaml")
     args = parser.parse_args()
+
+    from utils.logging_config import setup_logging
+    setup_logging(log_dir="outputs/logs", log_file="pretrain_projhead.log")
+
     pretrain(args.config)

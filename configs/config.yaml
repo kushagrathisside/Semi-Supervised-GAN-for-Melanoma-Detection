@@ -80,22 +80,20 @@ output:
 
 dino:
 
-  model: dinov3_vitb16       # DINOv3 distilled ViT-B/16 (trained on 1.7B images,
-                             # 12× more data than DINOv2; Gram anchoring for stable
-                             # dense features). Falls back to dinov2_vitb14 if needed.
+  model: dinov2_vitb14       # DINOv2 ViT-B/14 — publicly available weights.
+                             # (DINOv3 weights not publicly released as of June 2026.)
   input_size: 112            # Must be multiple of patch_size.
-                             # DINOv3 patch_size=16: 112=7×16 → 49 patch tokens ✓
                              # DINOv2 patch_size=14: 112=8×14 → 64 patch tokens ✓
-                             # 224 → 196/256 tokens (OOM at batch=256 on 8GB GPU)
+                             # 224 → 256 tokens (OOM at batch=256 on 8GB GPU)
 
   projection_head_path: outputs/projection_head.pt   # set by pretrain_projhead.py
 
   lambda_cc: 0.1             # weight for class-conditional matching term
   lambda_var: 0.0            # weight for variance matching term (0 = disabled)
 
-  pretrain_epochs: 100       # SupCon pre-training epochs for projection head
+  pretrain_epochs: 200       # SupCon pre-training epochs for projection head
   pretrain_lr: 0.001
-  supcon_temperature: 0.15   # τ; higher = softer clusters, lower collapse risk
+  supcon_temperature: 0.5    # τ=0.5: soft clusters, avoids within-class collapse at N=100
 
   lambda_cc_warmup_start: 50    # epoch at which class-conditional term activates
   lambda_cc_warmup_epochs: 50   # linear ramp duration (0 → lambda_cc over N epochs)
