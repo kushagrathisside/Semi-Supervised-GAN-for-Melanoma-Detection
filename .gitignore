@@ -94,6 +94,7 @@ model_*.pt
 # Logs and events
 *.log
 events.out.tfevents.*
+*logs*.txt
 
 # Generated files
 *.pyc

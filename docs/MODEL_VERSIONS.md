@@ -157,6 +157,13 @@ loss_G = adversarial_weight · L_adv
 DINO is only loaded when the weight is > 0. The improvement of DINO-MMD over Adv-R1 is the
 headline ablation.
 
+**Status of the headline ablation:** On the 32×32 liveProject data (held-out, n=40),
+DINO-MMD did **not** beat Adv-R1 on classification (within noise; it only improved generator
+FID 545→527). That data is also non-citeable (educational liveProject set). The decisive
+test now runs on **HAM10000 @ 64×64** with the official ISIC-2018 test set (n=1511). Full
+results, the held-out methodology, and the dataset-provenance story are in
+[EXPERIMENTS.md](EXPERIMENTS.md).
+
 ---
 
 ## Code map
@@ -169,4 +176,8 @@ headline ablation.
 | Generator step / loss composition | [training/trainer.py](../training/trainer.py) |
 | `GeneratorLossConfig`, `DINOConfig`, R1 knobs in `TrainingConfig` | [utils/config.py](../utils/config.py) |
 | Loss weights, D rebalance, TTUR, R1 | [configs/config.yaml](../configs/config.yaml) |
+| Held-out classifier eval / supervised baseline / split | [evaluation/evaluate_classifier.py](../evaluation/evaluate_classifier.py), [evaluation/train_supervised_baseline.py](../evaluation/train_supervised_baseline.py), [evaluation/make_split.py](../evaluation/make_split.py) |
+| HAM10000 → 64px binary SSL prep | [scripts/prep_ham10000.py](../scripts/prep_ham10000.py) |
+| HAM10000 run configs | [configs/ham64_advr1.yaml](../configs/ham64_advr1.yaml), [configs/ham64_dinomMMD.yaml](../configs/ham64_dinomMMD.yaml) |
+| Evaluation results, methodology, dataset provenance | [docs/EXPERIMENTS.md](EXPERIMENTS.md) |
 | DINO-Mean (negative result) run artifacts | `outputs/archive_run1_dino_meanmatch/` |
